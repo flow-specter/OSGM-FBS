@@ -9,8 +9,16 @@
 * <作者>  <时间>  <版本编号>  <描述>\n
 */
 #include"osgm_types.h"
+#include "../include/RFMBaseFunction.h"
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include "opencv2/imgproc/imgproc.hpp"
+
 #include <vector>
+using namespace cv;
 using namespace std;
+
+
 
 /**
 * @fn initializeFirstScanPaths
@@ -347,4 +355,176 @@ void aggregateCosts(int rows, int cols, float  **TmpThisZMax, float  **TmpThisZM
 
 
 
+double groundCalCorr(int LengthOfWin, P3D ground, double roughRes,
+	double UL_lon, double UL_lat, Mat img1, Mat img2, Mat RoughDem, vector<RPCMODEL>  rpcs, int baseindex, int searchIndex){
+	double thinRes = roughRes / 3;
+	//定义两个小窗口Mat
+	cv::Mat win1(LengthOfWin, LengthOfWin, CV_8UC1); win1.setTo(0);
+	cv::Mat win2(LengthOfWin, LengthOfWin, CV_8UC1); win2.setTo(0);
 
+	//给win1和win2赋值
+	for (int i = 0; i < LengthOfWin; i++)
+	{
+		uchar* p_win1 = win1.ptr<uchar>(i);
+		uchar* p_win2 = win2.ptr<uchar>(i); //指针用于赋值
+
+		for (int j = 0; j <= LengthOfWin; j++)
+		{
+			double tmpSampleBase, tmpLineBase, tmpSampleSearch, tmpLineSearch;
+			P3D tmpGroundP3D; int tmpX_ind, tmpY_ind;
+			tmpGroundP3D.lat = thinRes*i + ground.lat - thinRes*(LengthOfWin - 1) / 2;
+			tmpGroundP3D.lon = thinRes*j + ground.lon - thinRes*(LengthOfWin - 1) / 2;
+			tmpX_ind = (tmpGroundP3D.lon - UL_lon) / roughRes;
+			tmpY_ind = (UL_lat - tmpGroundP3D.lat) / roughRes;
+			/*float* p = RoughDem.ptr<float>(tmpY_ind);*/
+
+			tmpGroundP3D.z = ground.z; //和ground的Z值一致
+			//tmpGroundP3D.z = p[tmpX_ind]; //roughDem行列处的高程
+
+			if (tmpX_ind < 0 || tmpX_ind > RoughDem.cols
+				|| tmpY_ind < 0 || tmpY_ind> RoughDem.rows || abs(tmpGroundP3D.z)>100000)
+			{
+				return 0;
+			}
+
+			//1. 确定地面点的三维坐标
+			API_LATLONGHEIFHT2LineSample(rpcs[baseindex], tmpGroundP3D.lat, tmpGroundP3D.lon, tmpGroundP3D.z, tmpSampleBase, tmpLineBase);
+			API_LATLONGHEIFHT2LineSample(rpcs[searchIndex], tmpGroundP3D.lat, tmpGroundP3D.lon, tmpGroundP3D.z, tmpSampleSearch, tmpLineSearch);
+
+			//2. 投影至像方，得到像方点坐标，进而得到像方点的灰度值，赋给小mat
+			p_win1[j] = get_origin_value(img1, tmpSampleBase, tmpLineBase);
+			p_win2[j] = get_origin_value(img2, tmpSampleSearch, tmpLineSearch);
+			//测试
+			//cout << (int)p_win1[j] << " ";
+		}
+		//cout << endl;
+	}
+
+	//计算win1和win2的相关系数并返回
+	double corr2 = 0;
+	double Amean2 = 0;
+	double Bmean2 = 0;
+	for (int m = 0; m < win1.rows; m++) {
+		uchar* dataA = win1.ptr<uchar>(m);
+		uchar* dataB = win2.ptr<uchar>(m);
+		for (int n = 0; n < win1.cols; n++) {
+			Amean2 = Amean2 + dataA[n];
+			Bmean2 = Bmean2 + dataB[n];
+		}
+	}
+	Amean2 = Amean2 / (win1.rows * win1.cols);
+	Bmean2 = Bmean2 / (win2.rows * win2.cols);
+	double Cov = 0;
+	double Astd = 0;
+	double Bstd = 0;
+	for (int m = 0; m < win1.rows; m++) {
+		uchar* dataA = win1.ptr<uchar>(m);
+		uchar* dataB = win2.ptr<uchar>(m);
+		for (int n = 0; n < win1.cols; n++) {
+			//协方差
+			Cov = Cov + (dataA[n] - Amean2) * (dataB[n] - Bmean2);
+			//A的方差
+			Astd = Astd + (dataA[n] - Amean2) * (dataA[n] - Amean2);
+			//B的方差
+			Bstd = Bstd + (dataB[n] - Bmean2) * (dataB[n] - Bmean2);
+		}
+	}
+	corr2 = Cov / (sqrt(Astd * Bstd));
+	return corr2;
+	//https://blog.csdn.net/u013162930/article/details/50887019
+};
+
+double CalCorr(int LengthOfWin, Mat img1, Mat img2, ImgPoint P1, ImgPoint P2, float subpixelLength){
+	//若出边界，则暂时舍弃该点，之后再考虑减小窗口等
+	if (P1.sample - (LengthOfWin - 1) / 2 < 0 || P1.sample + (LengthOfWin - 1) / 2 > img1.cols
+		|| P1.line - (LengthOfWin - 1) / 2 < 0 || P1.line + (LengthOfWin - 1) / 2 > img1.rows)
+	{
+		return 0;
+	}
+
+	//定义两个小窗口Mat
+	cv::Mat win1(LengthOfWin, LengthOfWin, CV_8UC1); win1.setTo(0);
+	cv::Mat win2(LengthOfWin, LengthOfWin, CV_8UC1); win2.setTo(0);
+
+	//给win1和win2赋值
+	for (int i = 0; i <LengthOfWin; i++)
+	{
+		uchar* p_win1 = win1.ptr<uchar>(i);
+		uchar* p_win2 = win2.ptr<uchar>(i); //指针用于赋值
+
+		for (int j = 0; j <= LengthOfWin; j++)
+		{
+			p_win1[j] = get_origin_value(img1, subpixelLength*i + P1.sample - subpixelLength*(LengthOfWin - 1) / 2, subpixelLength*j + P1.line - subpixelLength*(LengthOfWin - 1) / 2);
+			p_win2[j] = get_origin_value(img2, subpixelLength*i + P2.sample - subpixelLength*(LengthOfWin - 1) / 2, subpixelLength*j + P2.line - subpixelLength*(LengthOfWin - 1) / 2);
+			//测试
+			//cout << (int)p_win1[j] << " ";
+		}
+		//cout << endl;
+	}
+
+	/*对比测试是否子像素
+	cout << "-------------------------------" << endl;
+	for (int i = 0; i <LengthOfWin; i++)
+	{
+	uchar* p_win1 = win1.ptr<uchar>(i);
+	uchar* p_win2 = win2.ptr<uchar>(i); //指针用于赋值
+
+	for (int j = 0; j <= LengthOfWin; j++)
+	{
+	p_win1[j] = get_origin_value(img1, i + P1.sample - (LengthOfWin - 1) / 2, j + P1.line - (LengthOfWin - 1) / 2);
+	p_win2[j] = get_origin_value(img2, i + P2.sample - (LengthOfWin - 1) / 2, j + P2.line - (LengthOfWin - 1) / 2);
+	//测试
+	cout << (int)p_win1[j] << " ";
+	}
+	cout << endl;
+	}
+
+	cout << "-------------------------------" << endl;
+	*/
+
+	//计算win1和win2的相关系数并返回
+	double corr2 = 0;
+	double Amean2 = 0;
+	double Bmean2 = 0;
+	for (int m = 0; m < win1.rows; m++) {
+		uchar* dataA = win1.ptr<uchar>(m);
+		uchar* dataB = win2.ptr<uchar>(m);
+		for (int n = 0; n < win1.cols; n++) {
+			Amean2 = Amean2 + dataA[n];
+			Bmean2 = Bmean2 + dataB[n];
+		}
+	}
+	Amean2 = Amean2 / (win1.rows * win1.cols);
+	Bmean2 = Bmean2 / (win2.rows * win2.cols);
+	double Cov = 0;
+	double Astd = 0;
+	double Bstd = 0;
+	for (int m = 0; m < win1.rows; m++) {
+		uchar* dataA = win1.ptr<uchar>(m);
+		uchar* dataB = win2.ptr<uchar>(m);
+		for (int n = 0; n < win1.cols; n++) {
+			//协方差
+			Cov = Cov + (dataA[n] - Amean2) * (dataB[n] - Bmean2);
+			//A的方差
+			Astd = Astd + (dataA[n] - Amean2) * (dataA[n] - Amean2);
+			//B的方差
+			Bstd = Bstd + (dataB[n] - Bmean2) * (dataB[n] - Bmean2);
+		}
+	}
+	corr2 = Cov / (sqrt(Astd * Bstd));
+	return corr2;
+	//https://blog.csdn.net/u013162930/article/details/50887019
+};
+
+void WriteArguPath(ofstream &writeArguPath, int sufferZ, int largePenalty, int smallPenalty, int N_times_res, int corrWin, int NumOfImgs){
+	if (writeArguPath){
+		writeArguPath << "sufferZ: " << sufferZ << endl <<
+			"largePenalty: " << largePenalty << endl <<
+			"smallPenalty: " << smallPenalty << endl <<
+			"细化倍数 N_times_res: " << N_times_res << endl <<
+			"相关系数窗口：" << corrWin << endl <<
+			NumOfImgs << "张影像" << endl <<
+			" z搜索间距: " << Z_resolution << "米" <<
+			endl << "备注： 四片影像细化倍数为3倍，roughDem为imread(F:/A_工作笔记/开题/论文/已有工作/zhinvRoughDem.tif, -1);" << endl;
+	}
+}
