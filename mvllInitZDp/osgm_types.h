@@ -72,6 +72,11 @@ struct ImgPoint{
 
 /** \brief PMS参数结构体 */
 struct OSGMOption {
+	float32 sufferZ; // 可忍受的高程变化，界定p1与p2
+
+
+
+
 	sint32	patch_size;			// patch尺寸，局部窗口为 patch_size*patch_size
 	sint32  min_disparity;		// 最小视差
 	sint32	max_disparity;		// 最大视差

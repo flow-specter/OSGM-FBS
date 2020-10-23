@@ -2,25 +2,56 @@
 #include <algorithm> //vector成员函数头文件
 #include<windows.h>    //头文件  
 #include <iomanip>
-//#include <opencv2/core/core.hpp>
-//#include <opencv2/highgui/highgui.hpp>
-//#include "opencv2/imgproc/imgproc.hpp"
-
 
 #include "osgm_types.h"
 #include "osgm_utils.h"
 #include "CubicSplineInterpolation.h"
+#include "../include/mlRVML.h"
+#include "../include/mlTypes.h"
+
+
 
 #define PATHS_PER_SCAN 8
 #define DEBUG falses
 #define TEST_TWO_IMAGE true
 using namespace cv;
 
+/*
+brief: getP3DSearchRange 得到初始粗DEM每个格网的最高高程以及最低高程，以设定搜索范围。
+para[in]: 
+para[in]:
+para[in]:
+
+*/
+void getP3DSearchRange(Mat roughDem, Mat &dilated_up_dem, Mat &erode_down_dem,sint8 structuringElementSize=3) {
+	
+	Mat element_dilated = getStructuringElement(MORPH_RECT, Size(structuringElementSize, structuringElementSize));
+	dilate(roughDem, dilated_up_dem, element_dilated);
+
+	////查看膨胀高程最大值
+	//double max, min;
+	//cv::Point min_loc, max_loc;
+	//cv::minMaxLoc(dilated_up_dem, &min, &max, &min_loc, &max_loc);
+
+	Mat element_erode = getStructuringElement(MORPH_RECT, Size(structuringElementSize, structuringElementSize));
+	erode(roughDem, erode_down_dem, element_erode);
+
+	//查看腐蚀高程最小值
+	//double maxErode, minErode;
+	//cv::Point min_erode_loc, max_erode_loc;
+	//cv::minMaxLoc(erode_down_dem, &minErode, &maxErode, &min_erode_loc, &max_erode_loc);
+
+}
+
+
+
 int main(){
 	clock_t startTime, endTime;
 	startTime = clock();
 
-	//------------------------------------------------------------------------------------0. 定义参数并记录
+
+	//------------------------------------------------------------------------------
+	//-----参数定义
 	float sufferZ = Z_resolution;
 	int corrWin = 45;
 	int largePenalty = 16;
@@ -42,23 +73,9 @@ int main(){
 	double rough_lat_res = 0.0019531249, rough_lon_res = 0.0019531249;
 
 	// 预处理，对sldem进行膨胀和腐蚀，自适应P3D的搜索范围，即得到每个待求格网的搜索最高点以及最低点
-	Mat dilated_up_dem;
-	Mat element_dilated = getStructuringElement(MORPH_RECT, Size(3, 3));
-	dilate(roughDem, dilated_up_dem, element_dilated);
+	Mat dilated_up_dem, erode_down_dem;
+	getP3DSearchRange(roughDem, dilated_up_dem, erode_down_dem);
 
-	//查看膨胀高程最大值
-	double max, min;
-	cv::Point min_loc, max_loc;
-	cv::minMaxLoc(dilated_up_dem, &min, &max, &min_loc, &max_loc);
-
-	Mat erode_down_dem;
-	Mat element_erode = getStructuringElement(MORPH_RECT, Size(3, 3));
-	erode(roughDem, erode_down_dem, element_erode);
-
-	//查看腐蚀高程最小值
-	double maxErode, minErode;
-	cv::Point min_erode_loc, max_erode_loc;
-	cv::minMaxLoc(erode_down_dem, &minErode, &maxErode, &min_erode_loc, &max_erode_loc);
 
 	int rough_rows = roughDem.rows, rough_cols = roughDem.cols;
 	int detail_rows = rough_rows*N_times_res;
@@ -152,7 +169,7 @@ int main(){
 			ThisZ_min = p_erode[(col / N_times_res)] - Z_resolution;
 
 			//if (abs(ThisZ_max) >= 100000 || (abs(ThisZ_max) >= 100000)){ ThisZ_max = roughZmean + Z_resolution; ThisZ_min = roughZmean - Z_resolution; }
-			if ((abs(ThisZ_max) >= 100000) || ((abs(ThisZ_min) >= 100000))){ ThisZ_max = 0; ThisZ_min = 0; }
+			if ((abs(ThisZ_max) >= 10000) || ((abs(ThisZ_min) >= 10000))){ ThisZ_max = 0; ThisZ_min = 0; }
 
 			TmpThisZ_min[row][col] = ThisZ_min;
 			TmpThisZ_max[row][col] = ThisZ_max;
@@ -224,6 +241,7 @@ int main(){
 		if (Z_max - Z_init == 0){ continue; }
 		vector<double> AllZValueOfThisXY((Z_max - Z_init) / Z_resolution + 1);
 		vector<double> AllCorrOfThisXY((Z_max - Z_init) / Z_resolution + 1);
+
 		for (float Z = Z_init; Z <= Z_max; Z += Z_resolution){ //是否给定高程初始范围的实验
 			tmpP3D.z = Z;
 			//for (float Z = ThisCubioInfo.Z_min; Z <= ThisCubioInfo.Z_max; Z += Z_resolution){
