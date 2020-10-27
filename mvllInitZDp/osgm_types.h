@@ -12,7 +12,7 @@
 #ifndef _OSGM_TYPES_H
 #define _OSGM_TYPES_H
 
-#define Z_resolution 1
+
 #include <iostream>
 #include <cstdint>
 

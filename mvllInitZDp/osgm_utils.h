@@ -17,6 +17,309 @@
 #include <vector>
 using namespace cv;
 using namespace std;
+constexpr auto Z_resolution = 1;
+
+// -----------------------------------------------------------------
+// 相关系数，最小二乘匹配
+void vectorsort(std::vector < cv::Point3f>& Temp_sort)
+{
+	for (int i = 0; i < Temp_sort.size() - 1; i++) {
+		float tem = 0;
+		float temx = 0;
+		float temy = 0;
+		// 内层for循环控制相邻的两个元素进行比较
+		for (int j = i + 1; j < Temp_sort.size(); j++) {
+			if (Temp_sort.at(i).z < Temp_sort.at(j).z) {
+				tem = Temp_sort.at(j).z;
+				Temp_sort.at(j).z = Temp_sort.at(i).z;
+				Temp_sort.at(i).z = tem;
+
+				temx = Temp_sort.at(j).x;
+				Temp_sort.at(j).x = Temp_sort.at(i).x;
+				Temp_sort.at(i).x = temx;
+
+				temy = Temp_sort.at(j).y;
+				Temp_sort.at(j).y = Temp_sort.at(i).y;
+				Temp_sort.at(i).y = temy;
+			}
+		}
+	}
+}
+
+//相关系数图像匹配
+float Get_coefficient(cv::Mat matchLeftWindow, cv::Mat imageRight, int x, int y)
+{
+	//根据左搜索窗口确定右搜索窗口的大小
+	cv::Mat Rmatchwindow;
+	Rmatchwindow.create(matchLeftWindow.rows, matchLeftWindow.cols, CV_32FC1);
+	float aveRImg = 0;
+	for (int m = 0; m < matchLeftWindow.rows; m++)
+	{
+		for (int n = 0; n < matchLeftWindow.cols; n++)
+		{
+			aveRImg += imageRight.at<uchar>(x + m, y + n);
+			Rmatchwindow.at<float>(m, n) = imageRight.at<uchar>(x + m, y + n);
+		}
+	}
+	aveRImg = aveRImg / (matchLeftWindow.rows * matchLeftWindow.cols);
+	for (int m = 0; m < matchLeftWindow.rows; m++)
+	{
+		for (int n = 0; n < matchLeftWindow.cols; n++)
+		{
+			Rmatchwindow.at<float>(m, n) -= aveRImg;
+		}
+	}
+	//开始计算相关系数
+	float cofficent1 = 0;
+	float cofficent2 = 0;
+	float cofficent3 = 0;
+	for (int m = 0; m < matchLeftWindow.rows; m++)
+	{
+		for (int n = 0; n < matchLeftWindow.cols; n++)
+		{
+			cofficent1 += matchLeftWindow.at<float>(m, n) * Rmatchwindow.at<float>(m, n);
+			cofficent2 += Rmatchwindow.at<float>(m, n) * Rmatchwindow.at<float>(m, n);
+			cofficent3 += matchLeftWindow.at<float>(m, n) * matchLeftWindow.at<float>(m, n);
+		}
+	}
+	double cofficent = cofficent1 / sqrt(cofficent2 * cofficent3);
+	return cofficent;
+}
+
+int kyhMatchImgbyLST(const cv::Mat& imageLeft, const cv::Mat& imageRight, std::vector<cv::Point3f> featurePointLeft)
+{
+
+	int matchsize = 9;//相关系数的正方形窗口的边长
+	int half_matchsize = matchsize / 2;//边长的一半
+
+	std::vector<cv::Point3f> featurePointRight;//右片匹配到的数据
+
+	float lowst_door = 0.7; //相关系数法匹配的阈值
+	int dist_width = 30;//左相片与右相片的相对距离，在这里通过手动观察
+
+	//进行f数据的预处理 删除不符合规范的数据
+	for (size_t i = 0; i < featurePointLeft.size(); i++)
+	{
+		//这里的 5 = half_matchsize + 1
+		if ((featurePointLeft.at(i).y + dist_width < imageLeft.cols) || (imageLeft.cols - featurePointLeft.at(i).y < 5))
+		{
+			featurePointLeft.erase(featurePointLeft.begin() + i);
+			i--;
+			continue;
+		}
+		if ((featurePointLeft.at(i).x < 5) || (imageLeft.rows - featurePointLeft.at(i).x < 5))
+		{
+			featurePointLeft.erase(featurePointLeft.begin() + i);
+			i--;
+			continue;
+		}
+
+	}
+	//创建左窗口的小窗口
+	cv::Mat matchLeftWindow;
+	matchLeftWindow.create(matchsize, matchsize, CV_32FC1);
+	for (size_t i = 0; i < featurePointLeft.size(); i++)
+	{
+		float aveLImg = 0;
+		for (int m = 0; m < matchsize; m++)
+		{
+			for (int n = 0; n < matchsize; n++)
+			{
+				aveLImg += imageLeft.at<uchar>(featurePointLeft.at(i).x - half_matchsize + m, featurePointLeft.at(i).y - half_matchsize + n);
+				matchLeftWindow.at<float>(m, n) = imageLeft.at<uchar>(featurePointLeft.at(i).x - half_matchsize + m, featurePointLeft.at(i).y - half_matchsize + n);
+			}
+		}
+		aveLImg = aveLImg / (matchsize * matchsize);//求取左窗口平均值
+		//均除某个值
+		for (int m = 0; m < matchsize; m++)
+		{
+			for (int n = 0; n < matchsize; n++)
+			{
+				matchLeftWindow.at<float>(m, n) = matchLeftWindow.at<float>(m, n) - aveLImg;
+			}
+		}
+		//***************************对右窗口进行计算
+		//首先预估右窗口的位置
+		int halflengthsize = 10; //搜索区的半径
+		std::vector < cv::Point3f> tempfeatureRightPoint;
+		//去除跑到窗口外的点
+		for (int ii = -halflengthsize; ii <= halflengthsize; ii++)
+		{
+			for (int jj = -halflengthsize; jj <= halflengthsize; jj++)
+			{
+				//为了省事…… 把边缘超限的都给整没了
+				if ((featurePointLeft.at(i).x < (halflengthsize + 5)) || (imageRight.rows - featurePointLeft.at(i).x) < (halflengthsize + 5)
+					|| (featurePointLeft.at(i).y + dist_width - imageLeft.cols) < (halflengthsize + 5))
+				{
+					cv::Point3f temphalflengthsize;
+					temphalflengthsize.x = 0;
+					temphalflengthsize.y = 0;
+					temphalflengthsize.z = 0;
+					tempfeatureRightPoint.push_back(temphalflengthsize);
+				}
+				else
+				{
+					cv::Point3f temphalflengthsize;
+					int x = featurePointLeft.at(i).x + ii - half_matchsize;
+					int y = featurePointLeft.at(i).y + dist_width - imageLeft.cols + jj - half_matchsize;
+					float  coffee = Get_coefficient(matchLeftWindow, imageRight, x, y);
+					temphalflengthsize.x = featurePointLeft.at(i).x + ii;
+					temphalflengthsize.y = featurePointLeft.at(i).y + dist_width - imageLeft.cols + jj;
+					temphalflengthsize.z = coffee;
+					tempfeatureRightPoint.push_back(temphalflengthsize);
+				}
+			}
+		}
+		vectorsort(tempfeatureRightPoint);
+
+		if (tempfeatureRightPoint.at(0).z > lowst_door && tempfeatureRightPoint.at(0).z < 1)
+		{
+			cv::Point3f tempr;
+			tempr.x = tempfeatureRightPoint.at(0).x;
+			tempr.y = tempfeatureRightPoint.at(0).y;
+			tempr.z = tempfeatureRightPoint.at(0).z;
+			featurePointRight.push_back(tempr);
+		}
+		else
+		{
+			featurePointLeft.erase(featurePointLeft.begin() + i);
+			i--;
+			continue;
+		}
+	}
+	//得到左右两片的同名点初始值
+
+	/*正式开始最小二乘匹配*/
+	std::vector<cv::Point3f> featureRightPointLST;//存储最小二乘匹配到的点
+	//求几何畸变的初始值
+	cv::Mat formerP = cv::Mat::eye(2 * featurePointLeft.size(), 2 * featurePointLeft.size(), CV_32F)/*权矩阵*/,
+		formerL = cv::Mat::zeros(2 * featurePointLeft.size(), 1, CV_32F)/*常数项*/,
+		formerA = cv::Mat::zeros(2 * featurePointLeft.size(), 6, CV_32F)/*系数矩阵*/;
+	for (int i = 0; i < featurePointLeft.size(); i++)
+	{
+		float x1 = featurePointLeft.at(i).x;
+		float y1 = featurePointLeft.at(i).y;
+		float x2 = featurePointRight.at(i).x;
+		float y2 = featurePointRight.at(i).y;
+		float coef = featurePointRight.at(i).z;//初始同名点的相关系数作为权重
+		formerP.at<float>(2 * i, 2 * i) = coef;
+		formerP.at<float>(2 * i + 1, 2 * i + 1) = coef;
+		formerL.at<float>(2 * i, 0) = x2;
+		formerL.at<float>(2 * i + 1, 0) = y2;
+		formerA.at<float>(2 * i, 0) = 1; formerA.at<float>(2 * i, 1) = x1; formerA.at<float>(2 * i, 2) = y1;
+		formerA.at<float>(2 * i + 1, 3) = 1; formerA.at<float>(2 * i + 1, 4) = x1; formerA.at<float>(2 * i + 1, 5) = y1;
+	}
+	cv::Mat Nbb = formerA.t() * formerP * formerA, U = formerA.t() * formerP * formerL;
+	cv::Mat formerR = Nbb.inv() * U;
+	//开始进行最小二乘匹配
+	for (int i = 0; i < featurePointLeft.size(); i++)
+	{
+		//坐标的迭代初始值
+		float x1 = featurePointLeft.at(i).x;
+		float y1 = featurePointLeft.at(i).y;
+		float x2 = featurePointRight.at(i).x;
+		float y2 = featurePointRight.at(i).y;
+		//几何畸变参数迭代初始值
+		float a0 = formerR.at<float>(0, 0); float a1 = formerR.at<float>(1, 0); float a2 = formerR.at<float>(2, 0);
+		float b0 = formerR.at<float>(3, 0); float b1 = formerR.at<float>(4, 0); float b2 = formerR.at<float>(5, 0);
+		//辐射畸变迭代初始值
+		float h0 = 0, h1 = 1;
+
+		//当后一次相关系数小于前一次，迭代停止
+		float beforeCorrelationCoe = 0/*前一个相关系数*/, CorrelationCoe = 0;
+		float xs = 0, ys = 0;
+
+		while (beforeCorrelationCoe <= CorrelationCoe)
+		{
+			beforeCorrelationCoe = CorrelationCoe;
+			cv::Mat C = cv::Mat::zeros(matchsize * matchsize, 8, CV_32F);//系数矩阵，matchsize为左片目标窗口大小
+			cv::Mat L = cv::Mat::zeros(matchsize * matchsize, 1, CV_32F);//常数项
+			cv::Mat P = cv::Mat::eye(matchsize * matchsize, matchsize * matchsize, CV_32F);//权矩阵
+			float sumgxSquare = 0, sumgySquare = 0, sumXgxSquare = 0, sumYgySquare = 0;
+			int dimension = 0;//用于矩阵赋值
+			float sumLImg = 0, sumLImgSquare = 0, sumRImg = 0, sumRImgSquare = 0, sumLR = 0;
+
+			for (int m = x1 - half_matchsize; m <= x1 + half_matchsize; m++)
+			{
+				for (int n = y1 - half_matchsize; n <= y1 + half_matchsize; n++)
+				{
+					float x2 = a0 + a1 * m + a2 * n;
+					float y2 = b0 + b1 * m + b2 * n;
+					int I = std::floor(x2); int J = std::floor(y2);//不大于自变量的最大整数
+					if (I <= 1 || I >= imageRight.rows - 1 || J <= 1 || J >= imageRight.cols - 1)
+					{
+						I = 2; J = 2; P.at<float>((m - (y1 - 5) - 1) * (2 * 4 + 1) + n - (x1 - 5), (m - (y1 - 5) - 1) * (2 * 4 + 1) + n - (x1 - 5)) = 0;
+					}
+
+
+					//双线性内插重采样
+					float linerGray = (J + 1 - y2) * ((I + 1 - x2) * imageRight.at<uchar>(I, J) + (x2 - I) * imageRight.at<uchar>(I + 1, J))
+						+ (y2 - J) * ((I + 1 - x2) * imageRight.at<uchar>(I, J + 1) + (x2 - I) * imageRight.at<uchar>(I + 1, J + 1));
+					//辐射校正
+					float radioGray = h0 + h1 * linerGray;//得到相应灰度
+
+					sumRImg += radioGray;
+					sumRImgSquare += radioGray * radioGray;
+					//确定系数矩阵
+					float gy = 0.5 * (imageRight.at<uchar>(I, J + 1) - imageRight.at<uchar>(I, J - 1));
+					float gx = 0.5 * (imageRight.at<uchar>(I + 1, J) - imageRight.at<uchar>(I - 1, J));
+					C.at<float>(dimension, 0) = 1; C.at<float>(dimension, 1) = linerGray;
+					C.at<float>(dimension, 2) = gx; C.at<float>(dimension, 3) = x2 * gx;
+					C.at<float>(dimension, 4) = y2 * gx; C.at<float>(dimension, 5) = gy;
+					C.at<float>(dimension, 6) = x2 * gy; C.at<float>(dimension, 7) = y2 * gy;
+					//常数项赋值
+					L.at<float>(dimension, 0) = imageLeft.at<uchar>(m, n) - radioGray;
+					dimension = dimension + 1;
+					//左窗口加权平均
+					float gyLeft = 0.5 * (imageLeft.at<uchar>(m, n + 1) - imageLeft.at<uchar>(m, n - 1));
+					float gxLeft = 0.5 * (imageLeft.at<uchar>(m + 1, n) - imageLeft.at<uchar>(m - 1, n));
+					sumgxSquare += gxLeft * gxLeft;
+					sumgySquare += gyLeft * gyLeft;
+					sumXgxSquare += m * gxLeft * gxLeft;
+					sumYgySquare += n * gyLeft * gyLeft;
+					//左片灰度相加用于求相关系数
+					sumLImg += imageLeft.at<uchar>(m, n);
+					sumLImgSquare += imageLeft.at<uchar>(m, n) * imageLeft.at<uchar>(m, n);
+					sumLR += radioGray * imageLeft.at<uchar>(m, n);
+				}
+			}
+			//计算相关系数
+			float coefficent1 = sumLR - sumLImg * sumRImg / (matchsize * matchsize);
+			float coefficent2 = sumLImgSquare - sumLImg * sumLImg / (matchsize * matchsize);
+			float coefficent3 = sumRImgSquare - sumRImg * sumRImg / (matchsize * matchsize);
+			CorrelationCoe = coefficent1 / sqrt(coefficent2 * coefficent3);
+			//计算辐射畸变和几何变形的参数
+			cv::Mat Nb = C.t() * P * C, Ub = C.t() * P * L;
+			cv::Mat parameter = Nb.inv() * Ub;
+			float dh0 = parameter.at<float>(0, 0); float dh1 = parameter.at<float>(1, 0);
+			float da0 = parameter.at<float>(2, 0); float da1 = parameter.at<float>(3, 0); float da2 = parameter.at<float>(4, 0);
+			float db0 = parameter.at<float>(5, 0); float db1 = parameter.at<float>(6, 0); float db2 = parameter.at<float>(7, 0);
+
+			a0 = a0 + da0 + a0 * da1 + b0 * da2;
+			a1 = a1 + a1 * da1 + b1 * da2;
+			a2 = a2 + a2 * da1 + b2 * da2;
+			b0 = b0 + db0 + a0 * db1 + b0 * db2;
+			b1 = b1 + a1 * db1 + b1 * db2;
+			b2 = b2 + a2 * db1 + b2 * db2;
+			h0 = h0 + dh0 + h0 * dh1;
+			h1 = h1 + h1 * dh1;
+
+			float xt = sumXgxSquare / sumgxSquare;
+			float yt = sumYgySquare / sumgySquare;
+			xs = a0 + a1 * xt + a2 * yt;
+			ys = b0 + b1 * xt + b2 * yt;
+		}
+		cv::Point3f tempPoint;
+		tempPoint.x = xs;
+		tempPoint.y = ys;
+		tempPoint.z = CorrelationCoe;
+		featureRightPointLST.push_back(tempPoint);
+	}
+	return 0;
+}
+
+
+
 
 
 

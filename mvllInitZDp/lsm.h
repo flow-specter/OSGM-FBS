@@ -1,13 +1,6 @@
 #pragma once
 #include <vector>
 
-class lsm
-{
-
-
-};
-
-
 struct LSMSummary {
     ///\brief ³õÊ¼µÄcost
     double initial_cost;
