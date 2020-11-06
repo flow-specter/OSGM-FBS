@@ -9,7 +9,7 @@
 #include <string>
 using namespace cv;
 
-constexpr auto Invalid_Float = std::numeric_limits<float>::infinity();
+//constexpr auto Invalid_Float = std::numeric_limits<float>::infinity();
 
 
 class preProcessing
