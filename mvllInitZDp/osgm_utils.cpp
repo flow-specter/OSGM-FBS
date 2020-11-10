@@ -157,7 +157,6 @@ void osgm_util::rowCol2LatLon(int row, int col, float UL_lon, float UL_lat, floa
 		lon = UL_lon + col * reso;	
 }
 
-
 /*
 \brief: 判断像点(sample,line)所在的计算窗口是否在影像内
 \para[in]: sample 像方的sample坐标，或者说x坐标
@@ -211,95 +210,6 @@ void osgm_util::chooseBaseImg(vector<uint8*> Imgs, vector<RPCMODEL> rpcs, int im
 		}
 	}
 }
-
-/**
-* \brief 左右路径聚合 → ←
-* \param img_data			输入，影像数据
-* \param width				输入，影像宽
-* \param height				输入，影像高
-* \param min_disparity		输入，最小视差
-* \param max_disparity		输入，最大视差
-* \param p1					输入，惩罚项P1
-* \param p2_init			输入，惩罚项P2_Init
-* \param cost_init			输入，初始代价数据
-* \param cost_aggr			输出，路径聚合代价数据
-* \param is_forward			输入，是否为正方向（正方向为从左到右，反方向为从右到左）
-*/
-//void osgm_util::CostAggregateLeftRight(const uint8* img_data, const sint32& width, const sint32& height, const sint32& min_disparity, const sint32& max_disparity, const sint32& p1, const sint32& p2_init, const uint8* cost_init, uint8* cost_aggr, bool is_forward)
-//{
-//	assert(width > 0 && height > 0);
-//
-//	// 视差范围
-//
-//	// P1,P2
-//	const auto& P1 = p1;
-//	const auto& P2_Init = p2_init;
-//
-//	// 正向(左->右) ：is_forward = true ; direction = 1
-//	// 反向(右->左) ：is_forward = false; direction = -1;
-//	const sint32 direction = is_forward ? 1 : -1;
-//
-//	// 聚合
-//	for (sint32 i = 0u; i < height; i++) {
-//		// 路径头为每一行的首(尾,dir=-1)列像素
-//		auto cost_init_row = (is_forward) ? (cost_init + i * width * disp_range) : (cost_init + i * width * disp_range + (width - 1) * disp_range);
-//		auto cost_aggr_row = (is_forward) ? (cost_aggr + i * width * disp_range) : (cost_aggr + i * width * disp_range + (width - 1) * disp_range);
-//		auto img_row = (is_forward) ? (img_data + i * width) : (img_data + i * width + width - 1);
-//
-//		// 路径上当前灰度值和上一个灰度值
-//		uint8 gray = *img_row;
-//		uint8 gray_last = *img_row;
-//
-//		// 路径上上个像素的代价数组，多两个元素是为了避免边界溢出（首尾各多一个）
-//		std::vector<uint8> cost_last_path(disp_range + 2, UINT8_MAX);
-//
-//		// 初始化：第一个像素的聚合代价值等于初始代价值
-//		memcpy(cost_aggr_row, cost_init_row, disp_range * sizeof(uint8));
-//		memcpy(&cost_last_path[1], cost_aggr_row, disp_range * sizeof(uint8));
-//		cost_init_row += direction * disp_range;
-//		cost_aggr_row += direction * disp_range;
-//		img_row += direction;
-//
-//		// 路径上上个像素的最小代价值
-//		uint8 mincost_last_path = UINT8_MAX;
-//		for (auto cost : cost_last_path) {
-//			mincost_last_path = std::min(mincost_last_path, cost);
-//		}
-//
-//		// 自方向上第2个像素开始按顺序聚合
-//		for (sint32 j = 0; j < width - 1; j++) {
-//			gray = *img_row;
-//			uint8 min_cost = UINT8_MAX;
-//			for (sint32 d = 0; d < disp_range; d++) {
-//				// Lr(p,d) = C(p,d) + min( Lr(p-r,d), Lr(p-r,d-1) + P1, Lr(p-r,d+1) + P1, min(Lr(p-r))+P2 ) - min(Lr(p-r))
-//				const uint8  cost = cost_init_row[d];
-//				const uint16 l1 = cost_last_path[d + 1];
-//				const uint16 l2 = cost_last_path[d] + P1;
-//				const uint16 l3 = cost_last_path[d + 2] + P1;
-//				const uint16 l4 = mincost_last_path + std::max(P1, P2_Init / (abs(gray - gray_last) + 1));
-//
-//				const uint8 cost_s = cost + static_cast<uint8>(std::min(std::min(l1, l2), std::min(l3, l4)) - mincost_last_path);
-//
-//				cost_aggr_row[d] = cost_s;
-//				min_cost = std::min(min_cost, cost_s);
-//			}
-//
-//			// 重置上个像素的最小代价值和代价数组
-//			mincost_last_path = min_cost;
-//			memcpy(&cost_last_path[1], cost_aggr_row, disp_range * sizeof(uint8));
-//
-//			// 下一个像素
-//			cost_init_row += direction * disp_range;
-//			cost_aggr_row += direction * disp_range;
-//			img_row += direction;
-//
-//			// 像素值重新赋值
-//			gray_last = gray;
-//		}
-//	}
-//
-//
-//}
 
 void osgm_util::deleteNodataValue(const Mat& src, Mat& dst)
 {

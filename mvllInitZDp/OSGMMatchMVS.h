@@ -1,6 +1,6 @@
 #pragma once
 #include "osgm_utils.h"
-
+#include <stdlib.h>
 using namespace cv;
 using namespace std;
 
@@ -69,13 +69,26 @@ private: // 私有函数
 	void ComputeCost() const;
 
 	/** \brief 代价聚合	 */
-	void CostAggregation() const;
+	void CostAggregation() ;
 
 	/** \brief 视差计算	 */
 	void ComputeDisparity() const;
 
 	/** \brief 内存释放	 */
 	void Release();
+
+private: // 主要用于代价聚合的私有函数
+	/**
+	 * \brief 左右路径聚合 → ←
+	 * \param is_forward		输入，是否为正方向（正方向为从左到右，反方向为从右到左）
+	 */
+	void CostAggregateLeftRight(uint8* cost_aggr, bool is_forward = true);
+
+	/* \brief: 从上到下方向进行聚合*/
+	void CostAggregateUpDown(uint8* cost_aggr);
+
+	/* \brief: 从下到上方向进行聚合*/
+	void CostAggregateDownUp(uint8* cost_aggr);
 
 
 private:
@@ -97,10 +110,18 @@ private:
 	/** \brief 目标区域分辨率 GSD	 */
 	float32 reso_;
 
-	/** \brief 每一个数组元素对应着该位置之前的高程范围数值，便于计算cost的位置	 */
-	float32* accumulate_cost_size_;
 
+	/** \brief 每一个数组元素对应着 每个平面位置的待计算的格网size，即三维cost上某平面位置上的格网数量
+	*/
+	uint32* per_cost_size_;
 
+	/** \brief 每一个数组元素对应着该位置之前的高程范围加和数值，便于计算cost的位置；
+	包括该平面位置本身，即从第(0,0)平面位置其至该平面位置(i,j)的局部最高高程（包括局部最高高程）所计算过的cost格网数量。
+	*/
+	uint32* accumulate_cost_size_;
+
+	/* \brief 初始代价/聚集代价等的size */
+	sint32 size_;
 
 	/** \brief 多视影像数据	 */
 	vector<uint8*> imgs_;

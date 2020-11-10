@@ -119,7 +119,6 @@ int main() {
 	auto tt = duration_cast<std::chrono::milliseconds>(end - start);
 	printf("初始代价计算及匹配 Done! Timing : %lf s\n\n", tt.count() / 1000.0);
 
-
 	// 显示res图
 	cv::Mat res_mat = cv::Mat(dst_rows, dst_cols, CV_8UC1);
 	for (uint32 i = 0; i < dst_rows; i++) {

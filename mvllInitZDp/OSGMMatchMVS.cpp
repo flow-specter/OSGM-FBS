@@ -28,7 +28,6 @@ bool OSGMMatchMVS::Initialize(const sint32& img_rows, const sint32& img_cols, co
 	// ... 开辟内存空间
 
 	// census值
-
 	const sint32 img_size = img_rows * img_cols;
 
 	for (int i = 0; i < num_imgs; ++i) {
@@ -36,12 +35,27 @@ bool OSGMMatchMVS::Initialize(const sint32& img_rows, const sint32& img_cols, co
 		census_imgs_.push_back(census_tmp);
 	}
 
-	// 匹配代价（初始/聚合）
-
-	// 计算高程范围
+	// ... 为初始DEM（已上采样）分配空间，并赋值
+	
+	// 预处理sldem（上采样，去除无效值）
 	Mat resize_sldem_ori = Mat::zeros(option_.dst_rows, option_.dst_cols, CV_32F);;
-	resize(roughDem, resize_sldem_ori, resize_sldem_ori.size(), 0, 0, INTER_AREA);
+	resize(roughDem, resize_sldem_ori, resize_sldem_ori.size(), 0, 0, INTER_AREA); //将初始dem上采样至目标大小
+	Mat resize_sldem = resize_sldem_ori.clone();
+	osgm_util::deleteNodataValue(resize_sldem_ori, resize_sldem);
 
+	// 分配空间，并赋值 【todo： 待检查】
+	initial_Dem_ = new float32[dst_rows_ * dst_cols_]();
+	
+	for (int i = 0; i < dst_rows_; ++i) 
+	{
+		float* pResizeSLDEM = resize_sldem.ptr<float>(i);
+		for (int j = 0; j < dst_cols_; ++j) 
+		{
+			initial_Dem_[i * dst_cols_ + j] = pResizeSLDEM[j];
+		}
+	}
+
+	// 为局部高程最低值、最高值以及每个物方格网的一维序标分配空间，并赋值。
 	Mat dilated_up_dem = resize_sldem_ori.clone();
 	Mat erode_down_dem = resize_sldem_ori.clone();
 	Mat adjustHeis = Mat::zeros(resize_sldem_ori.size(), CV_32F);
@@ -51,31 +65,34 @@ bool OSGMMatchMVS::Initialize(const sint32& img_rows, const sint32& img_cols, co
 	// 根据adjustHeis计算代价空间size
 
 	Mat adjustSize = adjustHeis/ Z_resolution + 1;
-	sint32 size = cv::sum(adjustSize)[0] ; // 三维转为一维数组的size
-	cout << size << endl;
-
-	//sint32 size = cv::sum(adjustHeis)[0] / Z_resolution + 1; // 三维转为一维数组的size
-	//if (size < 0) return false;
-	//cost_size = size; 
-	//cout << size << endl;
-
-	// 为accumulat_cost_size分配空间，并赋值
-
-	accumulate_cost_size_ = new float32[size]();
+	size_ = cv::sum(adjustSize)[0] ; // 三维转为一维数组的size
+	//cout << size << endl; 
+	 
+	// 为accumulat_cost_size_分配空间，并赋值
+	accumulate_cost_size_ = new uint32[dst_cols_ * dst_rows_]();
 	float pre_adjustSize = 0;
-	for (int i = 0; i < dst_rows_; ++i) {
-		float* p_adjustSize = adjustSize.ptr<float>(i);
-		for (int j = 0; j < dst_cols_; ++j) {
-			accumulate_cost_size_[i * option_.dst_cols + j] = p_adjustSize[j] + pre_adjustSize;
+	for (int i = 0; i < dst_rows_; ++i) 
+	{
+		const float* p_adjustSize = adjustSize.ptr<float>(i);
+		for (int j = 0; j < dst_cols_; ++j) 
+		{
+			accumulate_cost_size_[i * dst_cols_ + j] = p_adjustSize[j] + pre_adjustSize;
 			pre_adjustSize = accumulate_cost_size_[i * option_.dst_cols + j];
 		}
 	}
 
-	//cout << static_cast<float>(adjustHeis.data[101]) << " " << static_cast<float>(adjustHeis.data[102]) << " " << static_cast<float>(adjustHeis.data[103] )<< endl;
-	//cout << adjustSize.data[101] << " " << adjustSize.data[102] << " " << adjustSize.data[103] << endl;
-	//cout << accumulate_cost_size_[101] << " "<< accumulate_cost_size_[102] << " "<<accumulate_cost_size_[103]<<endl;
+	// 为per_cost_size_分配空间，并赋值 【未检查】
+	per_cost_size_ = new uint32[dst_cols_ * dst_rows_]();
+	for (int i = 0; i < dst_rows_; ++i)
+	{
+		const float* p_adjustSize = adjustSize.ptr<float>(i);
+		for (int j = 0; j < dst_cols_; ++j)
+		{
+			per_cost_size_[i * dst_cols_ + j] = p_adjustSize[j];
+		}
+	}
 
-	// 为局部高程最大值以及最低值赋值
+	// 为局部高程最大值以及最低值分配空间，并赋值
 	dilated_up_Dem_ = new float32[dst_rows_ * dst_cols_]();
 	erode_down_Dem_ = new float32[dst_rows_ * dst_cols_]();
 
@@ -89,24 +106,21 @@ bool OSGMMatchMVS::Initialize(const sint32& img_rows, const sint32& img_cols, co
 		}
 	}
 
-	//cout << dilated_up_Dem_[0] << endl;
-	//cout << erode_down_Dem_[60 * dst_cols_ + 65] << endl;
-
 	// 匹配代价（初始/聚合）
-	cost_init_ = new uint8[size]();
-	for (int i = 0; i < size; ++i) {
+	cost_init_ = new uint8[size_]();
+	for (int i = 0; i < size_; ++i) {
 		cost_init_[i] = UINT8_MAX / 2;
 	}
 
-	cost_aggr_ = new uint16[size]();
-	cost_aggr_1_ = new uint8[size]();
-	cost_aggr_2_ = new uint8[size]();
-	cost_aggr_3_ = new uint8[size]();
-	cost_aggr_4_ = new uint8[size]();
-	cost_aggr_5_ = new uint8[size]();
-	cost_aggr_6_ = new uint8[size]();
-	cost_aggr_7_ = new uint8[size]();
-	cost_aggr_8_ = new uint8[size]();
+	cost_aggr_ = new uint16[size_]();
+	cost_aggr_1_ = new uint8[size_]();
+	cost_aggr_2_ = new uint8[size_]();
+	cost_aggr_3_ = new uint8[size_]();
+	cost_aggr_4_ = new uint8[size_]();
+	cost_aggr_5_ = new uint8[size_]();
+	cost_aggr_6_ = new uint8[size_]();
+	cost_aggr_7_ = new uint8[size_]();
+	cost_aggr_8_ = new uint8[size_]();
 
 	// 目标DEM图，res
 	res_ = new float32[dst_rows_ * dst_cols_]();
@@ -252,65 +266,29 @@ void OSGMMatchMVS::ComputeCost() const
 	}
 }
 
-void OSGMMatchMVS::CostAggregation() const
+void OSGMMatchMVS::CostAggregation() 
 {
-}
+	//// 测试左右路径
+	//CostAggregateLeftRight(cost_aggr_1_, true);
+	//CostAggregateLeftRight(cost_aggr_2_, false);
 
-//void OSGMMatchMVS::CostAggregation() const
-//{
-//	// 路径聚合
-//   // 1、左->右/右->左
-//   // 2、上->下/下->上
-//   // 3、左上->右下/右下->左上
-//   // 4、右上->左上/左下->右上
-//   //
-//   // ↘ ↓ ↙   5  3  7
-//   // →    ←	 1    2
-//   // ↗ ↑ ↖   8  4  6
-//   //
-//
-//	// 计算三维cost数组的size
-//	const auto& min_disparity = option_.min_disparity;
-//	const auto& max_disparity = option_.max_disparity;
-//	assert(max_disparity > min_disparity);
-//
-//	const sint32 size = width_ * height_ * (max_disparity - min_disparity);
-//	if (size <= 0) {
-//		return;
-//	}
-//
-//	// 惩罚参数赋值
-//	const auto& P1 = option_.p1;
-//	const auto& P2_Int = option_.p2_init;
-//
-//	if (option_.num_paths == 4 || option_.num_paths == 8) {
-//		// 左右聚合
-//		osgm_util::CostAggregateLeftRight(img_left_, width_, height_, min_disparity, max_disparity, P1, P2_Int, cost_init_, cost_aggr_1_, true);
-//		osgm_util::CostAggregateLeftRight(img_left_, width_, height_, min_disparity, max_disparity, P1, P2_Int, cost_init_, cost_aggr_2_, false);
-//		// 上下聚合
-//		osgm_util::CostAggregateUpDown(img_left_, width_, height_, min_disparity, max_disparity, P1, P2_Int, cost_init_, cost_aggr_3_, true);
-//		osgm_util::CostAggregateUpDown(img_left_, width_, height_, min_disparity, max_disparity, P1, P2_Int, cost_init_, cost_aggr_4_, false);
-//	}
-//
-//	if (option_.num_paths == 8) {
-//		// 对角线1聚合
-//		osgm_util::CostAggregateDagonal_1(img_left_, width_, height_, min_disparity, max_disparity, P1, P2_Int, cost_init_, cost_aggr_5_, true);
-//		osgm_util::CostAggregateDagonal_1(img_left_, width_, height_, min_disparity, max_disparity, P1, P2_Int, cost_init_, cost_aggr_6_, false);
-//		// 对角线2聚合
-//		osgm_util::CostAggregateDagonal_2(img_left_, width_, height_, min_disparity, max_disparity, P1, P2_Int, cost_init_, cost_aggr_7_, true);
-//		osgm_util::CostAggregateDagonal_2(img_left_, width_, height_, min_disparity, max_disparity, P1, P2_Int, cost_init_, cost_aggr_8_, false);
-//	}
-//
-//	// 把4/8个方向加起来
-//	for (sint32 i = 0; i < size; i++) {
-//		if (option_.num_paths == 4 || option_.num_paths == 8) {
-//			cost_aggr_[i] = cost_aggr_1_[i] + cost_aggr_2_[i] + cost_aggr_3_[i] + cost_aggr_4_[i];
-//		}
-//		if (option_.num_paths == 8) {
-//			cost_aggr_[i] += cost_aggr_5_[i] + cost_aggr_6_[i] + cost_aggr_7_[i] + cost_aggr_8_[i];
-//		}
-//	}
-//}
+	//// 相加得到cost_aggr_
+	//for (sint32 i = 0; i < size_; i++) {
+	//	cost_aggr_[i] = cost_aggr_1_[i] + cost_aggr_2_[i] ;
+	//}
+
+	// 测试上->下路径 + 下->上路径
+
+	CostAggregateLeftRight(cost_aggr_1_, true);
+	CostAggregateLeftRight(cost_aggr_2_, false);
+	CostAggregateUpDown(cost_aggr_3_);
+	CostAggregateDownUp(cost_aggr_4_);
+	for (sint32 i = 0; i < size_; i++) 
+	{
+		cost_aggr_[i] = cost_aggr_1_[i] + cost_aggr_2_[i] + cost_aggr_3_[i] + cost_aggr_4_[i];
+	}
+
+}
 
 void OSGMMatchMVS::ComputeDisparity() const
 {
@@ -318,8 +296,8 @@ void OSGMMatchMVS::ComputeDisparity() const
 	//cout << accumulate_cost_size_[102] << endl; // 应为15
 	//cout << accumulate_cost_size_[103] << endl; // 
 
-
-	auto cost_ptr = cost_init_;
+	//auto cost_ptr = cost_init_; // 测试初始代价
+	auto cost_ptr = cost_aggr_; // 测试单路径聚合代价
 
 	// 逐像素计算最佳高程
 	for (sint32 i = 0; i < dst_rows_; ++i) {
@@ -337,8 +315,6 @@ void OSGMMatchMVS::ComputeDisparity() const
 				int cost_idx = accumulate_cost_size_[i * dst_cols_ + j] - (local_max - hei) / Z_resolution;
 				const auto& cost = cost_ptr[cost_idx];
 
-
-
 				//cout << cost << endl;
 				//cout << static_cast<uint16>(cost) << endl;
 
@@ -352,7 +328,6 @@ void OSGMMatchMVS::ComputeDisparity() const
 
 			//if (best_hei != 0) cout << best_hei << endl;
 			//res_[i * dst_cols_ + j] = static_cast<float>(best_hei);
-
 			//res_[i * dst_cols_ + j] = static_cast<float>(best_hei);
 
 			 //最小代价值对应的高程值即为平面位置的最优高程
@@ -408,6 +383,431 @@ void OSGMMatchMVS::Release()
 	SAFE_DELETE(cost_aggr_8_);
 	SAFE_DELETE(res_);
 }
+
+void OSGMMatchMVS::CostAggregateLeftRight(uint8* cost_aggr, bool is_forward)
+{
+	cout << is_forward << endl;
+
+	// 取惩罚参数P1,P2
+	const float32& P1 = option_.p1;
+	const float32& P2_Init = option_.p2_init;
+
+	// 正向(左->右) ：is_forward = true ; direction = 1
+	// 反向(右->左) ：is_forward = false; direction = -1;
+	const sint32 direction = is_forward ? 1 : -1;
+
+	// 聚合
+	for (sint32 i = 0u; i < dst_rows_; i++) {
+
+		//if (is_forward == false)
+		//{
+		//	cout << "反向第" <<i<<"行" <<endl;
+
+		//}
+
+		// 路径头为每一行的首(尾,dir=-1)列像素，首先取得三维格网(i,j,local_min)位置在一维数组中的下标，再取得其地址。
+		int cost_leftmost_idx = accumulate_cost_size_[i * dst_cols_] - (dilated_up_Dem_[i * dst_cols_] - erode_down_Dem_[i*dst_cols_]) / Z_resolution;
+		int cost_rightmost_idx = accumulate_cost_size_[i * dst_cols_ + dst_cols_ - 1] - (dilated_up_Dem_[i * dst_cols_ + dst_cols_ - 1] - erode_down_Dem_[i * dst_cols_ + dst_cols_ - 1]) / Z_resolution;;
+
+		auto cost_init_row = (is_forward) ? (cost_init_ + cost_leftmost_idx) : (cost_init_ + cost_rightmost_idx);
+		auto cost_aggr_row = (is_forward) ? (cost_aggr + cost_leftmost_idx) : (cost_aggr + cost_rightmost_idx);
+		auto img_row = (is_forward) ? (initial_Dem_ + i * dst_cols_) : (initial_Dem_ + i * dst_cols_ + dst_cols_ - 1);
+
+		// 路径上当前的初始高程值和上一个平面位置的初始高程值
+		float32 gray = *img_row;
+		float32 gray_last = *img_row;
+
+		// 路径上上个像素的代价数组，多两个元素是为了避免边界溢出（首尾各多一个）
+		// 左->右 与 右->左方向不同，则代价数组的大小也不同。
+		// 或者直接拿该行最大的之类的？ 比如100之类的？
+		std::vector<uint8> cost_last_path(100, UINT8_MAX);
+		
+		// 初始化：第一个像素的聚合代价值等于初始代价值
+		::memcpy(cost_aggr_row, cost_init_row, per_cost_size_[i*dst_cols_] * sizeof(uint8));
+		::memcpy(&cost_last_path[1], cost_aggr_row, per_cost_size_[i * dst_cols_] * sizeof(uint8));
+
+		if (is_forward == true)
+		{
+			cost_init_row += per_cost_size_[i * dst_cols_]; // cost_init_[i][1][0]位置
+			cost_aggr_row += per_cost_size_[i * dst_cols_];
+		}
+		else
+		{
+			int ctmp_idx = accumulate_cost_size_[i * dst_cols_ + dst_cols_ - 2] - (dilated_up_Dem_[i * dst_cols_ + dst_cols_ - 2] - erode_down_Dem_[i * dst_cols_ + dst_cols_ - 2]) / Z_resolution;
+			cost_init_row = cost_init_ + ctmp_idx;
+			cost_aggr_row = cost_aggr + ctmp_idx;
+		}
+
+		img_row += direction;
+
+		// 路径上上个像素的最小代价值
+		uint8 mincost_last_path = UINT8_MAX;
+		for (auto cost : cost_last_path) {
+			mincost_last_path = std::min(mincost_last_path, cost);
+		}
+
+		// 自方向上第2个像素开始按顺序聚合
+		for (sint32 j = 0; j < dst_cols_ - 1; j++) //这里的j仅仅代表着个数，而非下标，且不考虑边界的情况
+		{ 
+			gray = *img_row;
+			uint8 min_cost = UINT8_MAX;
+
+
+			int thisHeightSize;
+			if (is_forward == true)
+			{
+				thisHeightSize = per_cost_size_[i * dst_cols_ + j + 1];
+			}
+			else 
+			{
+				thisHeightSize = per_cost_size_[i * dst_cols_ + dst_cols_ -j -2];
+			}
+
+			for (sint32 d = 0; d < thisHeightSize; d++) {
+				// Lr(p,d) = C(p,d) + min( Lr(p-r,d), Lr(p-r,d-1) + P1, Lr(p-r,d+1) + P1, min(Lr(p-r))+P2 ) - min(Lr(p-r))
+			    // 不处理边界值，从1开始存储
+				//if (is_forward == false)
+				//{
+				//	cout << thisHeightSize << endl;
+				//}
+				
+				const uint8  cost = cost_init_row[d];
+				const uint16 l1 = cost_last_path[d + 1];
+				const uint16 l2 = cost_last_path[d] + P1;
+				const uint16 l3 = cost_last_path[d + 2] + P1;
+
+				// 判断初始DEM给的信息是否有效，若无效，则直接加P2_init即可
+				float32 deltaInitialHei;
+				if (gray > -10000 && gray < 10000 && gray_last>-10000 && gray_last < 10000)
+				{
+					deltaInitialHei = abs(gray - gray_last);
+				}
+				else
+				{
+					deltaInitialHei = 0; 
+				}
+
+				const uint16  l4 = mincost_last_path + std::max(P1, P2_Init / (deltaInitialHei + 1));
+				
+				const uint8 cost_s = cost + static_cast<uint8>(std::min(std::min(l1, l2), std::min(l3, l4)) - mincost_last_path);
+
+				cost_aggr_row[d] = cost_s;
+				min_cost = std::min(min_cost, cost_s);
+			}
+
+			// 重置上个像素的最小代价值和代价数组
+			mincost_last_path = min_cost;
+
+			for (int i = 0; i < cost_last_path.size(); ++i) 
+			{
+				cost_last_path[i] = UINT8_MAX;
+			}
+
+			::memcpy(&cost_last_path[1], cost_aggr_row, thisHeightSize * sizeof(uint8));
+
+			// ...更新下一个像素的地址
+			if (is_forward == true)
+			{
+				cost_init_row += per_cost_size_[i * dst_cols_ + j + 1];
+				cost_aggr_row += per_cost_size_[i * dst_cols_ + j + 1];
+			}
+			else
+			{
+				// [i][dst_cols_ - j - 2][0]位置的地址
+				float32 local_max = dilated_up_Dem_[i * dst_cols_ + dst_cols_ - j - 2];
+				float32 local_min = erode_down_Dem_[i * dst_cols_ + dst_cols_ - j - 2];
+				int tmp_index = accumulate_cost_size_[i * dst_cols_] - (local_max - local_min) / Z_resolution;
+				cost_init_row = cost_init_ + tmp_index;
+				cost_aggr_row = cost_init_ + tmp_index;
+			}
+
+			img_row += direction;
+
+			// 像素值重新赋值
+			gray_last = gray;
+		}
+	}
+}
+
+/* \brief: 从上往下聚合 */
+void OSGMMatchMVS::CostAggregateUpDown(uint8* cost_aggr)
+{
+	// P1,P2
+	const float32& P1 = option_.p1;
+	const float32& P2_Init = option_.p2_init;
+
+	// 正向(上->下) ：is_forward = true ; direction = 1
+	const sint32 direction = 1;
+
+	// 聚合
+	for (sint32 j = 0; j < dst_cols_; j++) {
+		// 路径头为每一列的首(尾,dir=-1)行像素
+		// 即cost_init的第[0][j][0]元素所在的地址
+		int cost_upmost_idx = accumulate_cost_size_[j] - (dilated_up_Dem_[j] - erode_down_Dem_[j]) / Z_resolution;
+		auto cost_init_col = cost_init_ + cost_upmost_idx ;
+		auto cost_aggr_col = cost_aggr + cost_upmost_idx; 
+		auto img_col = initial_Dem_ + j;
+
+		// 路径上当前灰度值和上一个灰度值
+		uint8 gray = *img_col;
+		uint8 gray_last = *img_col;
+
+		// 路径上上个像素的代价数组，多两个元素是为了避免边界溢出（首尾各多一个）
+		std::vector<uint8> cost_last_path(100 + 2, UINT8_MAX);
+
+		// 初始化：第一个像素的聚合代价值等于初始代价值
+		::memcpy(cost_aggr_col, cost_init_col, per_cost_size_[j] * sizeof(uint8));
+		::memcpy(&cost_last_path[1], cost_aggr_col, per_cost_size_[j] * sizeof(uint8));
+
+		//cost_init_[1][j][0]位置
+		int cost_secondUpMost_idx = accumulate_cost_size_[dst_cols_ + j] - (dilated_up_Dem_[dst_cols_ + j] - erode_down_Dem_[dst_cols_ + j]) / Z_resolution;
+		cost_init_col = cost_init_ + cost_secondUpMost_idx;
+		cost_aggr_col = cost_aggr + cost_secondUpMost_idx;
+		img_col += dst_cols_;
+
+		// 路径上上个像素的最小代价值
+		uint8 mincost_last_path = UINT8_MAX;
+		for (auto cost : cost_last_path) {
+			mincost_last_path = std::min(mincost_last_path, cost);
+		}
+
+		// 自方向上第2个像素开始按顺序聚合
+		for (sint32 i = 1; i < dst_rows_ ; i++)  
+		{
+			
+			gray = *img_col;
+			uint8 min_cost = UINT8_MAX;
+
+			// 每个平面位置的坐标为： [i][j]列，对于从上到下聚合而言，上一个平面位置的坐标为[i-1][j]。
+			for (sint32 d = 0; d < per_cost_size_[i*dst_cols_ + j]; d++) {
+				// Lr(p,d) = C(p,d) + min( Lr(p-r,d), Lr(p-r,d-1) + P1, Lr(p-r,d+1) + P1, min(Lr(p-r))+P2 ) - min(Lr(p-r))
+
+				const uint8  cost = cost_init_col[d];
+				const uint16 l1 = cost_last_path[d + 1];
+				const uint16 l2 = cost_last_path[d] + P1;
+				const uint16 l3 = cost_last_path[d + 2] + P1;
+
+				// 判断初始DEM给的信息是否有效，若无效，则直接加P2_init即可
+				float32 deltaInitialHei;
+				if (gray > -10000 && gray < 10000 && gray_last>-10000 && gray_last < 10000)
+				{
+					deltaInitialHei = abs(gray - gray_last);
+				}
+				else
+				{
+					deltaInitialHei = 0;
+				}
+
+				const uint16  l4 = mincost_last_path + std::max(P1, P2_Init / (deltaInitialHei + 1));
+
+				const uint8 cost_s = cost + static_cast<uint8>(std::min(std::min(l1, l2), std::min(l3, l4)) - mincost_last_path);
+
+				cost_aggr_col[d] = cost_s;
+				min_cost = std::min(min_cost, cost_s);
+			}
+
+			// 重置上个像素的最小代价值和代价数组
+			mincost_last_path = min_cost;
+			::memcpy(&cost_last_path[1], cost_aggr_col, per_cost_size_[i* dst_cols_ + j] * sizeof(uint8));
+
+			// 下一个像素,下一个平面坐标是[i+1][j]
+			// TODO 检查用per_cost_size是否正确
+			/*{
+				int nextRowIndex1 = accumulate_cost_size_[(i + 1) * dst_cols_ + j] - (dilated_up_Dem_[(i + 1) * dst_cols_ + j] - erode_down_Dem_[(i + 1) * dst_cols_ + j])/Z_resolution;
+				cout << nextRowIndex1 << endl;
+				int nextRowIndex2 = accumulate_cost_size_[(i + 1) * dst_cols_ + j] - per_cost_size_[(i + 1) * dst_cols_ + j] + 1;
+				cout << nextRowIndex2 << endl;
+			}*/
+
+			int nextRowIndex = accumulate_cost_size_[(i + 1) * dst_cols_ + j] - per_cost_size_[(i + 1) * dst_cols_ + j] + 1;
+			cost_init_col = cost_init_ + nextRowIndex;
+			cost_aggr_col = cost_aggr + nextRowIndex;
+			img_col += direction * dst_cols_;
+
+			// 像素值重新赋值
+			gray_last = gray;
+		}
+	}
+
+}
+
+void OSGMMatchMVS::CostAggregateDownUp(uint8* cost_aggr)
+{
+
+	// P1,P2
+	const float32& P1 = option_.p1;
+	const float32& P2_Init = option_.p2_init;
+
+	// 聚合,逐列地从下至上聚合
+	for (sint32 j = 0; j < dst_cols_; j++) {
+		// 从下向上是每一列的最后一行像素
+		// 即cost_init的第[dst_rows -1][j][0]元素所在的地址
+		int cost_downmost_idx = accumulate_cost_size_[(dst_rows_ - 1) * dst_cols_ + j] - per_cost_size_[(dst_rows_ - 1)* dst_cols_ + j] + 1;
+		auto cost_init_col = cost_init_ + cost_downmost_idx;
+		auto cost_aggr_col = cost_aggr + cost_downmost_idx;
+		auto img_col = initial_Dem_ + (dst_rows_ - 1) * dst_cols_ + j;
+
+		// 路径上当前灰度值和上一个灰度值
+		uint8 gray = *img_col;
+		uint8 gray_last = *img_col;
+
+		// 路径上上个像素的代价数组，多两个元素是为了避免边界溢出（首尾各多一个）
+		std::vector<uint8> cost_last_path(100 + 2, UINT8_MAX);
+
+		// 初始化：第一个像素的聚合代价值等于初始代价值
+		::memcpy(cost_aggr_col, cost_init_col, per_cost_size_[(dst_rows_ - 1) * dst_cols_ + j] * sizeof(uint8));
+		::memcpy(&cost_last_path[1], cost_aggr_col, per_cost_size_[(dst_rows_ - 1) * dst_cols_ + j] * sizeof(uint8));
+
+		//cost_init_[dst_rows_ - 2][j][0]位置
+		int cost_secondDownMost_idx = accumulate_cost_size_[(dst_rows_ - 2) * dst_cols_ + j] - per_cost_size_[(dst_rows_ - 2) * dst_cols_ + j] + 1;
+		cost_init_col = cost_init_ + cost_secondDownMost_idx;
+		cost_aggr_col = cost_aggr + cost_secondDownMost_idx;
+		img_col -= dst_cols_;
+
+		// 路径上上个像素的最小代价值
+		uint8 mincost_last_path = UINT8_MAX;
+		for (auto cost : cost_last_path) {
+			mincost_last_path = std::min(mincost_last_path, cost);
+		}
+
+		// 自下而上方向上第2个像素开始按顺序聚合
+		for (sint32 i = dst_rows_-2; i > 0 ; i--)
+		{
+
+			gray = *img_col;
+			uint8 min_cost = UINT8_MAX;
+
+			// 每个平面位置的坐标为： [i][j]列，对于从下到上聚合而言，上一个平面位置的坐标为[i+1][j]。
+			for (sint32 d = 0; d < per_cost_size_[i * dst_cols_ + j]; d++) {
+				// Lr(p,d) = C(p,d) + min( Lr(p-r,d), Lr(p-r,d-1) + P1, Lr(p-r,d+1) + P1, min(Lr(p-r))+P2 ) - min(Lr(p-r))
+
+				const uint8  cost = cost_init_col[d];
+				const uint16 l1 = cost_last_path[d + 1];
+				const uint16 l2 = cost_last_path[d] + P1;
+				const uint16 l3 = cost_last_path[d + 2] + P1;
+
+				// 判断初始DEM给的信息是否有效，若无效，则直接加P2_init即可
+				float32 deltaInitialHei;
+				if (gray > -10000 && gray < 10000 && gray_last>-10000 && gray_last < 10000)
+				{
+					deltaInitialHei = abs(gray - gray_last);
+				}
+				else
+				{
+					deltaInitialHei = 0;
+				}
+
+				const uint16  l4 = mincost_last_path + std::max(P1, P2_Init / (deltaInitialHei + 1));
+
+				const uint8 cost_s = cost + static_cast<uint8>(std::min(std::min(l1, l2), std::min(l3, l4)) - mincost_last_path);
+
+				cost_aggr_col[d] = cost_s;
+				min_cost = std::min(min_cost, cost_s);
+			}
+
+			// 重置上个像素的最小代价值和代价数组
+			mincost_last_path = min_cost;
+			::memcpy(&cost_last_path[1], cost_aggr_col, per_cost_size_[i * dst_cols_ + j] * sizeof(uint8));
+
+
+			// TODO 检查用per_cost_size是否正确
+			/*{
+				int nextRowIndex1 = accumulate_cost_size_[(i + 1) * dst_cols_ + j] - (dilated_up_Dem_[(i + 1) * dst_cols_ + j] - erode_down_Dem_[(i + 1) * dst_cols_ + j])/Z_resolution;
+				cout << nextRowIndex1 << endl;
+				int nextRowIndex2 = accumulate_cost_size_[(i + 1) * dst_cols_ + j] - per_cost_size_[(i + 1) * dst_cols_ + j] + 1;
+				cout << nextRowIndex2 << endl;
+			}*/
+
+			// 下一个像素,下一个平面坐标是[i-1][j]
+			int nextRowIndex = accumulate_cost_size_[(i - 1) * dst_cols_ + j] - per_cost_size_[(i - 1) * dst_cols_ + j] + 1;
+			cost_init_col = cost_init_ + nextRowIndex;
+			cost_aggr_col = cost_aggr + nextRowIndex;
+			img_col -=   dst_cols_;
+
+			// 像素值重新赋值
+			gray_last = gray;
+		}
+	}
+
+}
+
+//void OSGMMatchMVS::CostAggregateDownUp(uint8* cost_aggr)
+//{
+//
+//	assert(width > 0 && height > 0 && max_disparity > min_disparity);
+//
+//	// 视差范围
+//	const sint32 disp_range = max_disparity - min_disparity;
+//
+//	// P1,P2
+//	const auto& P1 = p1;
+//	const auto& P2_Init = p2_init;
+//
+//	// 正向(上->下) ：is_forward = true ; direction = 1
+//	// 反向(下->上) ：is_forward = false; direction = -1;
+//	const sint32 direction = is_forward ? 1 : -1;
+//
+//	// 聚合
+//	for (sint32 j = 0; j < width; j++) {
+//		// 路径头为每一列的首(尾,dir=-1)行像素
+//		auto cost_init_col = (is_forward) ? (cost_init + j * disp_range) : (cost_init + (height - 1) * width * disp_range + j * disp_range);
+//		auto cost_aggr_col = (is_forward) ? (cost_aggr + j * disp_range) : (cost_aggr + (height - 1) * width * disp_range + j * disp_range);
+//		auto img_col = (is_forward) ? (img_data + j) : (img_data + (height - 1) * width + j);
+//
+//		// 路径上当前灰度值和上一个灰度值
+//		uint8 gray = *img_col;
+//		uint8 gray_last = *img_col;
+//
+//		// 路径上上个像素的代价数组，多两个元素是为了避免边界溢出（首尾各多一个）
+//		std::vector<uint8> cost_last_path(disp_range + 2, UINT8_MAX);
+//
+//		// 初始化：第一个像素的聚合代价值等于初始代价值
+//		memcpy(cost_aggr_col, cost_init_col, disp_range * sizeof(uint8));
+//		memcpy(&cost_last_path[1], cost_aggr_col, disp_range * sizeof(uint8));
+//		cost_init_col += direction * width * disp_range;
+//		cost_aggr_col += direction * width * disp_range;
+//		img_col += direction * width;
+//
+//		// 路径上上个像素的最小代价值
+//		uint8 mincost_last_path = UINT8_MAX;
+//		for (auto cost : cost_last_path) {
+//			mincost_last_path = std::min(mincost_last_path, cost);
+//		}
+//
+//		// 自方向上第2个像素开始按顺序聚合
+//		for (sint32 i = 0; i < height - 1; i++) {
+//			gray = *img_col;
+//			uint8 min_cost = UINT8_MAX;
+//			for (sint32 d = 0; d < disp_range; d++) {
+//				// Lr(p,d) = C(p,d) + min( Lr(p-r,d), Lr(p-r,d-1) + P1, Lr(p-r,d+1) + P1, min(Lr(p-r))+P2 ) - min(Lr(p-r))
+//
+//				const uint8  cost = cost_init_col[d];
+//				const uint16 l1 = cost_last_path[d + 1];
+//				const uint16 l2 = cost_last_path[d] + P1;
+//				const uint16 l3 = cost_last_path[d + 2] + P1;
+//				const uint16 l4 = mincost_last_path + std::max(P1, P2_Init / (abs(gray - gray_last) + 1));
+//
+//				const uint8 cost_s = cost + static_cast<uint8>(std::min(std::min(l1, l2), std::min(l3, l4)) - mincost_last_path);
+//
+//				cost_aggr_col[d] = cost_s;
+//				min_cost = std::min(min_cost, cost_s);
+//			}
+//
+//			// 重置上个像素的最小代价值和代价数组
+//			mincost_last_path = min_cost;
+//			memcpy(&cost_last_path[1], cost_aggr_col, disp_range * sizeof(uint8));
+//
+//			// 下一个像素
+//			cost_init_col += direction * width * disp_range;
+//			cost_aggr_col += direction * width * disp_range;
+//			img_col += direction * width;
+//
+//			// 像素值重新赋值
+//			gray_last = gray;
+//		}
+//	}
+//}
+
 
 
 
